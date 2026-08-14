@@ -442,6 +442,49 @@ describe("OverlayBackground", () => {
         );
       },
     );
+
+    it("delays the init message until an in-flight cipher update completes, keeping cipher-dependent views from being built against the transiently empty cipher state", async () => {
+      const url = "https://jest-testing-website.com";
+      const tab = createChromeTabMock({ url });
+      const loginCipher = mock<CipherView>({
+        id: "cipher-id",
+        localData: { lastUsedDate: 222 },
+        name: "cipher-name",
+        type: CipherType.Login,
+        login: { username: "username", password: "password", uri: url },
+      });
+      overlayBackground["focusedFieldData"] = createFocusedFieldDataMock({ tabId: tab.id });
+      getTabFromCurrentWindowIdSpy.mockResolvedValue(tab);
+      cipherService.sortCiphersByLastUsedThenName.mockReturnValue(-1);
+      let resolveDecryptedCiphers: (cipherViews: CipherView[]) => void = () => {};
+      cipherService.getAllDecryptedForUrl.mockReturnValue(
+        new Promise((resolve) => {
+          resolveDecryptedCiphers = resolve;
+        }),
+      );
+
+      void overlayBackground.updateOverlayCiphers(false);
+      await flushPromises();
+
+      triggerPortOnConnectEvent(createPortSpyMock(AutofillOverlayPort.List));
+      await flushPromises();
+      listPortSpy = overlayBackground["inlineMenuListPort"];
+      expect(listPortSpy.postMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ command: "initAutofillInlineMenuList" }),
+      );
+
+      resolveDecryptedCiphers([loginCipher]);
+      await flushPromises();
+
+      expect(listPortSpy.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: "initAutofillInlineMenuList",
+          showInlineMenuAccountCreation: false,
+          generatedPassword: null,
+          ciphers: [expect.objectContaining({ id: "inline-menu-cipher-0" })],
+        }),
+      );
+    });
   });
 
   describe("when enableFillAssist is turned off", () => {

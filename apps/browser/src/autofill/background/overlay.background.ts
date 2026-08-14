@@ -156,6 +156,8 @@ export class OverlayBackground implements OverlayBackgroundInterface {
   private inlineMenuListPort: chrome.runtime.Port | null = null;
   private inlineMenuListMessageConnectorPort: chrome.runtime.Port | null = null;
   private inlineMenuCiphers: Map<string, CipherView> = new Map();
+  private inFlightOverlayCiphersUpdate: Promise<void> | null = null;
+  private resolveInFlightOverlayCiphersUpdate: (() => void) | null = null;
   private inlineMenuFido2Credentials: Set<string> = new Set();
   private inlineMenuPageTranslations: Record<string, string> | null = null;
   private inlineMenuPosition: InlineMenuPosition = {};
@@ -467,6 +469,11 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     const authStatus = await firstValueFrom(this.authService.activeAccountStatus$);
     if (authStatus === AuthenticationStatus.Unlocked) {
       this.inlineMenuCiphers = new Map();
+      if (this.inFlightOverlayCiphersUpdate === null) {
+        this.inFlightOverlayCiphersUpdate = new Promise((resolve) => {
+          this.resolveInFlightOverlayCiphersUpdate = resolve;
+        });
+      }
       this.updateOverlayCiphers$.next({ updateAllCipherTypes, refocusField });
     }
   }
@@ -482,50 +489,56 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     updateAllCipherTypes,
     refocusField,
   }: UpdateOverlayCiphersParams) {
-    const currentTab = await BrowserApi.getTabFromCurrentWindowId();
+    try {
+      const currentTab = await BrowserApi.getTabFromCurrentWindowId();
 
-    if (
-      this.focusedFieldData &&
-      this.focusedFieldData.tabId !== null &&
-      this.focusedFieldData.tabId !== undefined &&
-      currentTab?.id !== this.focusedFieldData.tabId
-    ) {
-      const focusedFieldTab = await BrowserApi.getTab(this.focusedFieldData.tabId);
-      if (focusedFieldTab) {
-        this.closeInlineMenu({ tab: focusedFieldTab }, { forceCloseInlineMenu: true });
+      if (
+        this.focusedFieldData &&
+        this.focusedFieldData.tabId !== null &&
+        this.focusedFieldData.tabId !== undefined &&
+        currentTab?.id !== this.focusedFieldData.tabId
+      ) {
+        const focusedFieldTab = await BrowserApi.getTab(this.focusedFieldData.tabId);
+        if (focusedFieldTab) {
+          this.closeInlineMenu({ tab: focusedFieldTab }, { forceCloseInlineMenu: true });
+        }
       }
-    }
 
-    if (!currentTab || !currentTab.url?.startsWith("http")) {
-      if (updateAllCipherTypes) {
-        this.cardAndIdentityCiphers = null;
+      if (!currentTab || !currentTab.url?.startsWith("http")) {
+        if (updateAllCipherTypes) {
+          this.cardAndIdentityCiphers = null;
+        }
+        return;
       }
-      return;
-    }
 
-    const tabId = currentTab.id;
-    const request =
-      tabId !== null && tabId !== undefined
-        ? this.fido2ActiveRequestManager.getActiveRequest(tabId)
-        : null;
-    if (request) {
-      request.subject.next({ type: Fido2ActiveRequestEvents.Refresh });
-    }
+      const tabId = currentTab.id;
+      const request =
+        tabId !== null && tabId !== undefined
+          ? this.fido2ActiveRequestManager.getActiveRequest(tabId)
+          : null;
+      if (request) {
+        request.subject.next({ type: Fido2ActiveRequestEvents.Refresh });
+      }
 
-    this.inlineMenuFido2Credentials.clear();
-    if (tabId !== null && tabId !== undefined) {
-      this.storeInlineMenuFido2Credentials$.next(tabId);
-    }
+      this.inlineMenuFido2Credentials.clear();
+      if (tabId !== null && tabId !== undefined) {
+        this.storeInlineMenuFido2Credentials$.next(tabId);
+      }
 
-    const ciphersViews = await this.getCipherViews(currentTab, updateAllCipherTypes);
-    for (let cipherIndex = 0; cipherIndex < ciphersViews.length; cipherIndex++) {
-      this.inlineMenuCiphers.set(`inline-menu-cipher-${cipherIndex}`, ciphersViews[cipherIndex]);
-    }
+      const ciphersViews = await this.getCipherViews(currentTab, updateAllCipherTypes);
+      for (let cipherIndex = 0; cipherIndex < ciphersViews.length; cipherIndex++) {
+        this.inlineMenuCiphers.set(`inline-menu-cipher-${cipherIndex}`, ciphersViews[cipherIndex]);
+      }
 
-    await this.updateInlineMenuListCiphers(currentTab);
+      await this.updateInlineMenuListCiphers(currentTab);
 
-    if (refocusField) {
-      await BrowserApi.tabSendMessage(currentTab, { command: "focusMostRecentlyFocusedField" });
+      if (refocusField) {
+        await BrowserApi.tabSendMessage(currentTab, { command: "focusMostRecentlyFocusedField" });
+      }
+    } finally {
+      this.resolveInFlightOverlayCiphersUpdate?.();
+      this.resolveInFlightOverlayCiphersUpdate = null;
+      this.inFlightOverlayCiphersUpdate = null;
     }
   }
 
@@ -3485,16 +3498,35 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     port.onDisconnect.addListener(this.handlePortOnDisconnect);
 
     const authStatus = await this.getAuthStatus();
+
+    const showSaveLoginMenu =
+      (await this.checkFocusedFieldHasValue(port.sender.tab)) &&
+      (await this.shouldShowSaveLoginInlineMenuList(port.sender.tab));
+
+    const showAnimations = await firstValueFrom(this.autofillService.enableInlineMenuAnimation$);
+    const theme = await firstValueFrom(this.themeStateService.selectedTheme$);
+    const useLitComponents = isInlineMenuListPort
+      ? await firstValueFrom(this.useLitInlineMenuComponents$)
+      : undefined;
+
+    // Awaiting any in-flight cipher update and resolving the cipher-dependent
+    // state directly before posting keeps the initialization message from being
+    // built against the transiently empty cipher set that exists while
+    // `updateOverlayCiphers` repopulates `inlineMenuCiphers`. Without this, a
+    // field focused during a page load can initialize the menu with the
+    // password generator or an empty "no items" view despite the page having
+    // matching login ciphers.
+    if (isInlineMenuListPort) {
+      await this.waitForInFlightOverlayCiphersUpdate();
+    }
+
+    const ciphers = isInlineMenuListPort ? await this.getInlineMenuCipherData() : null;
     const showInlineMenuAccountCreation = this.shouldShowInlineMenuAccountCreation();
     const showInlineMenuPasswordGenerator = await this.shouldInitInlineMenuPasswordGenerator(
       authStatus,
       isInlineMenuListPort,
       showInlineMenuAccountCreation,
     );
-
-    const showSaveLoginMenu =
-      (await this.checkFocusedFieldHasValue(port.sender.tab)) &&
-      (await this.shouldShowSaveLoginInlineMenuList(port.sender.tab));
 
     const iframeUrl = BrowserApi.getRuntimeURL(
       `overlay/menu-${isInlineMenuListPort ? "list" : "button"}.html`,
@@ -3511,10 +3543,10 @@ export class OverlayBackground implements OverlayBackgroundInterface {
         isInlineMenuListPort ? "bitwardenVault" : "bitwardenOverlayButton",
       ),
       styleSheetUrl,
-      showAnimations: await firstValueFrom(this.autofillService.enableInlineMenuAnimation$),
-      theme: await firstValueFrom(this.themeStateService.selectedTheme$),
+      showAnimations,
+      theme,
       translations: this.getInlineMenuTranslations(),
-      ciphers: isInlineMenuListPort ? await this.getInlineMenuCipherData() : null,
+      ciphers,
       portKey: this.portKeyForTab[port.sender.tab.id],
       portName: isInlineMenuListPort
         ? AutofillOverlayPort.ListMessageConnector
@@ -3526,9 +3558,7 @@ export class OverlayBackground implements OverlayBackgroundInterface {
       showInlineMenuAccountCreation,
       authStatus,
       extensionOrigin,
-      useLitComponents: isInlineMenuListPort
-        ? await firstValueFrom(this.useLitInlineMenuComponents$)
-        : undefined,
+      useLitComponents,
     });
     if (port.sender) {
       this.updateInlineMenuPosition(
@@ -3598,6 +3628,34 @@ export class OverlayBackground implements OverlayBackgroundInterface {
   private storeExpiredOverlayPort(port: chrome.runtime.Port | null) {
     if (port) {
       this.expiredPorts.push(port);
+    }
+  }
+
+  /**
+   * Awaits any in-flight update of the inline menu ciphers. The
+   * `inlineMenuCiphers` map is cleared synchronously when an update is
+   * triggered and repopulated asynchronously, so cipher-dependent decisions
+   * made while an update is in flight would be based on a transiently empty
+   * cipher set. The wait is bounded so a long-running update (e.g. initial
+   * vault decryption) delays the inline menu instead of blocking it; in that
+   * case the completed update corrects the list through
+   * `updateInlineMenuListCiphers`.
+   */
+  private async waitForInFlightOverlayCiphersUpdate() {
+    const inFlightUpdate = this.inFlightOverlayCiphersUpdate;
+    if (inFlightUpdate === null) {
+      return;
+    }
+
+    let timeoutId: number | NodeJS.Timeout | null = null;
+    await Promise.race([
+      inFlightUpdate,
+      new Promise<void>((resolve) => {
+        timeoutId = globalThis.setTimeout(resolve, 500);
+      }),
+    ]);
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
     }
   }
 
