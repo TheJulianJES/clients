@@ -549,9 +549,25 @@ export class OverlayBackground implements OverlayBackgroundInterface {
       }
 
       const ciphersViews = await this.getCipherViews(currentTab, updateAllCipherTypes);
-      for (let cipherIndex = 0; cipherIndex < ciphersViews.length; cipherIndex++) {
-        this.inlineMenuCiphers.set(`inline-menu-cipher-${cipherIndex}`, ciphersViews[cipherIndex]);
+
+      // A superseded update must not publish its results: `switchMap` cannot
+      // cancel this promise, so without this guard a stale run finishing late
+      // would interleave another tab's ciphers into the current set and stamp
+      // `inlineMenuCiphersBuiltForTabId` for its own tab — mislabeling a
+      // mixed-origin cipher set as trustworthy and suppressing the
+      // port-connect recovery that would have repaired it.
+      if (generation !== this.overlayCiphersUpdateGeneration) {
+        return;
       }
+
+      const rebuiltInlineMenuCiphers = new Map<string, CipherView>();
+      for (let cipherIndex = 0; cipherIndex < ciphersViews.length; cipherIndex++) {
+        rebuiltInlineMenuCiphers.set(
+          `inline-menu-cipher-${cipherIndex}`,
+          ciphersViews[cipherIndex],
+        );
+      }
+      this.inlineMenuCiphers = rebuiltInlineMenuCiphers;
       this.inlineMenuCiphersBuiltForTabId = tabId ?? null;
 
       await this.updateInlineMenuListCiphers(currentTab);

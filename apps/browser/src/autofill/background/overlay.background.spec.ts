@@ -1489,6 +1489,43 @@ describe("OverlayBackground", () => {
       );
     });
 
+    it("does not publish a superseded update's ciphers over a newer tab's cipher set", async () => {
+      jest.useFakeTimers();
+      const slowTab = createChromeTabMock({ id: 1, url: "https://slow-website.com" });
+      const fastTab = createChromeTabMock({ id: 2, url: "https://fast-website.com" });
+      cipherService.sortCiphersByLastUsedThenName.mockReturnValue(-1);
+      let resolveSlowDecryption: (cipherViews: CipherView[]) => void = () => {};
+      cipherService.getAllDecryptedForUrl.mockImplementation((url) => {
+        if (url === "https://slow-website.com") {
+          return new Promise((resolve) => {
+            resolveSlowDecryption = resolve;
+          });
+        }
+
+        return Promise.resolve([loginCipher2, loginCipher1]);
+      });
+
+      void overlayBackground.updateOverlayCiphers(false, false, slowTab);
+      await flushPromises();
+      jest.advanceTimersByTime(150);
+      void overlayBackground.updateOverlayCiphers(false, false, fastTab);
+      await flushPromises();
+
+      expect(overlayBackground["inlineMenuCiphersBuiltForTabId"]).toBe(fastTab.id);
+      expect(overlayBackground["inlineMenuCiphers"].size).toBe(2);
+
+      resolveSlowDecryption([cardCipher]);
+      await flushPromises();
+
+      expect(overlayBackground["inlineMenuCiphersBuiltForTabId"]).toBe(fastTab.id);
+      expect(overlayBackground["inlineMenuCiphers"]).toStrictEqual(
+        new Map([
+          ["inline-menu-cipher-0", loginCipher1],
+          ["inline-menu-cipher-1", loginCipher2],
+        ]),
+      );
+    });
+
     it("continues updating the overlay ciphers after an update fails", async () => {
       jest.useFakeTimers();
       getTabFromCurrentWindowIdSpy.mockResolvedValue(tab);
