@@ -597,7 +597,6 @@ describe("OverlayBackground", () => {
     });
 
     it("rebuilds the ciphers from the connecting port's tab when the window query failed to resolve a tab", async () => {
-      jest.useFakeTimers();
       const url = "https://jest-testing-website.com";
       const loginCipher = mock<CipherView>({
         id: "cipher-id",
@@ -618,8 +617,6 @@ describe("OverlayBackground", () => {
 
       triggerPortOnConnectEvent(createPortSpyMock(AutofillOverlayPort.List));
       await flushPromises();
-      jest.advanceTimersByTime(150);
-      await flushPromises();
       listPortSpy = overlayBackground["inlineMenuListPort"];
 
       expect(listPortSpy.postMessage).toHaveBeenCalledWith(
@@ -631,7 +628,6 @@ describe("OverlayBackground", () => {
     });
 
     it("rebuilds the ciphers from the connecting port's tab when the window query resolved a different tab", async () => {
-      jest.useFakeTimers();
       const queriedTab = createChromeTabMock({ id: 99, url: "https://other-website.com" });
       getTabFromCurrentWindowIdSpy.mockResolvedValue(queriedTab);
       getTabSpy.mockResolvedValue(createChromeTabMock({ id: 1 }));
@@ -649,8 +645,6 @@ describe("OverlayBackground", () => {
 
       triggerPortOnConnectEvent(createPortSpyMock(AutofillOverlayPort.List));
       await flushPromises();
-      jest.advanceTimersByTime(150);
-      await flushPromises();
       listPortSpy = overlayBackground["inlineMenuListPort"];
 
       expect(cipherService.getAllDecryptedForUrl).toHaveBeenCalledWith(
@@ -658,6 +652,44 @@ describe("OverlayBackground", () => {
         mockUserId,
         [CipherType.Card, CipherType.Identity, CipherType.SshKey],
       );
+      expect(listPortSpy.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ command: "initAutofillInlineMenuList" }),
+      );
+    });
+
+    it("does not rebuild the ciphers when the focused field belongs to a different tab than the connecting port", async () => {
+      getTabFromCurrentWindowIdSpy.mockResolvedValue(null);
+      cipherService.getAllDecryptedForUrl.mockResolvedValue([]);
+      overlayBackground["focusedFieldData"] = createFocusedFieldDataMock({ tabId: 99 });
+
+      triggerPortOnConnectEvent(createPortSpyMock(AutofillOverlayPort.List));
+      await flushPromises();
+      listPortSpy = overlayBackground["inlineMenuListPort"];
+
+      expect(cipherService.getAllDecryptedForUrl).not.toHaveBeenCalled();
+      expect(listPortSpy.postMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ command: "initAutofillInlineMenuList" }),
+      );
+    });
+
+    it("posts the init message after the bounded wait elapses when the recovery rebuild does not complete in time", async () => {
+      jest.useFakeTimers();
+      getTabFromCurrentWindowIdSpy.mockResolvedValue(null);
+      cipherService.getAllDecryptedForUrl.mockReturnValue(new Promise(() => {}));
+      overlayBackground["focusedFieldData"] = createFocusedFieldDataMock({ tabId: 1 });
+
+      triggerPortOnConnectEvent(createPortSpyMock(AutofillOverlayPort.List));
+      await flushPromises();
+      listPortSpy = overlayBackground["inlineMenuListPort"];
+
+      expect(cipherService.getAllDecryptedForUrl).toHaveBeenCalled();
+      expect(listPortSpy.postMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ command: "initAutofillInlineMenuList" }),
+      );
+
+      jest.advanceTimersByTime(500);
+      await flushPromises();
+
       expect(listPortSpy.postMessage).toHaveBeenCalledWith(
         expect.objectContaining({ command: "initAutofillInlineMenuList" }),
       );

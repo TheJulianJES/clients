@@ -133,6 +133,7 @@ export class OverlayBackground implements OverlayBackgroundInterface {
   private readonly openViewVaultItemPopout = openViewVaultItemPopout;
   private readonly openAddEditVaultItemPopout = openAddEditVaultItemPopout;
   private readonly updateOverlayCiphers$ = new Subject<UpdateOverlayCiphersParams>();
+  private readonly immediateOverlayCiphersUpdate$ = new Subject<UpdateOverlayCiphersParams>();
   private readonly storeInlineMenuFido2Credentials$ = new ReplaySubject<number>(1);
   private readonly startInlineMenuDelayedClose$ = new Subject<void>();
   private readonly cancelInlineMenuDelayedClose$ = new Subject<boolean>();
@@ -334,9 +335,13 @@ export class OverlayBackground implements OverlayBackgroundInterface {
    * Initializes event observables that handle events which affect the overlay's behavior.
    */
   private initOverlayEventObservables() {
-    this.updateOverlayCiphers$
-      .pipe(
+    merge(
+      this.updateOverlayCiphers$.pipe(
         throttleTime(100, undefined, { leading: true, trailing: true }),
+      ),
+      this.immediateOverlayCiphersUpdate$,
+    )
+      .pipe(
         switchMap((updateOverlayCiphersParams) =>
           this.handleOverlayCiphersUpdate(updateOverlayCiphersParams),
         ),
@@ -475,23 +480,49 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     refocusField = false,
     tab?: chrome.tabs.Tab,
   ) {
+    await this.queueOverlayCiphersUpdate({ updateAllCipherTypes, refocusField, tab }, false);
+  }
+
+  /**
+   * Clears the inline menu ciphers and queues an update to rebuild them. Immediate
+   * updates skip the tab-event throttle; they are used for the targeted rebuild from
+   * a connecting port's tab, which is a single tab-scoped update rather than part of
+   * a tab-event burst, so throttling it would only delay the menu.
+   *
+   * @param updateAllCipherTypes - Identifies credit card and identity cipher types should also be updated
+   * @param refocusField - Identifies whether the most recently focused field should be refocused
+   * @param tab - The tab to build the ciphers for
+   * @param immediate - Skips the throttle when queueing the update
+   */
+  private async queueOverlayCiphersUpdate(
+    { updateAllCipherTypes, refocusField, tab }: Omit<UpdateOverlayCiphersParams, "generation">,
+    immediate: boolean,
+  ) {
     const authStatus = await firstValueFrom(this.authService.activeAccountStatus$);
-    if (authStatus === AuthenticationStatus.Unlocked) {
-      this.inlineMenuCiphers = new Map();
-      this.inlineMenuCiphersBuiltForTabId = null;
-      this.overlayCiphersUpdateGeneration++;
-      if (this.inFlightOverlayCiphersUpdate === null) {
-        this.inFlightOverlayCiphersUpdate = new Promise((resolve) => {
-          this.resolveInFlightOverlayCiphersUpdate = resolve;
-        });
-      }
-      this.updateOverlayCiphers$.next({
-        updateAllCipherTypes,
-        refocusField,
-        generation: this.overlayCiphersUpdateGeneration,
-        tab,
+    if (authStatus !== AuthenticationStatus.Unlocked) {
+      return;
+    }
+
+    this.inlineMenuCiphers = new Map();
+    this.inlineMenuCiphersBuiltForTabId = null;
+    this.overlayCiphersUpdateGeneration++;
+    if (this.inFlightOverlayCiphersUpdate === null) {
+      this.inFlightOverlayCiphersUpdate = new Promise((resolve) => {
+        this.resolveInFlightOverlayCiphersUpdate = resolve;
       });
     }
+
+    const updateParams: UpdateOverlayCiphersParams = {
+      updateAllCipherTypes,
+      refocusField,
+      generation: this.overlayCiphersUpdateGeneration,
+      tab,
+    };
+    if (immediate) {
+      this.immediateOverlayCiphersUpdate$.next(updateParams);
+      return;
+    }
+    this.updateOverlayCiphers$.next(updateParams);
   }
 
   /**
@@ -3577,7 +3608,10 @@ export class OverlayBackground implements OverlayBackgroundInterface {
         this.focusedFieldData?.tabId === port.sender.tab.id &&
         this.inlineMenuCiphersBuiltForTabId !== port.sender.tab.id
       ) {
-        await this.updateOverlayCiphers(false, false, port.sender.tab);
+        await this.queueOverlayCiphersUpdate(
+          { updateAllCipherTypes: false, refocusField: false, tab: port.sender.tab },
+          true,
+        );
         await this.waitForInFlightOverlayCiphersUpdate();
       }
 
