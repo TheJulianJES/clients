@@ -3542,8 +3542,9 @@ export class OverlayBackground implements OverlayBackgroundInterface {
       // this port's tab so its iframe is not left connected but uninitialized.
       // Treating a null stored port as "close" is intentional
       // over-approximation: it can redundantly close after a plain list
-      // disconnect, but it is what cleans up a live orphaned iframe when a
-      // same-tab successor itself disconnected during the wait.
+      // disconnect (also taking down the tab's inline menu button), but it is
+      // what cleans up a live orphaned iframe when a same-tab successor
+      // itself disconnected during the wait.
       if (this.inlineMenuListPort !== port) {
         if (this.inlineMenuListPort?.sender?.tab?.id !== port.sender.tab.id) {
           this.closeInlineMenu(port.sender, { forceCloseInlineMenu: true });
