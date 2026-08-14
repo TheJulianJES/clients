@@ -1558,6 +1558,39 @@ describe("OverlayBackground", () => {
       );
     });
 
+    it("still refocuses the most recently focused field when a refocusing update is superseded", async () => {
+      jest.useFakeTimers();
+      const slowTab = createChromeTabMock({ id: 1, url: "https://slow-website.com" });
+      const fastTab = createChromeTabMock({ id: 2, url: "https://fast-website.com" });
+      cipherService.sortCiphersByLastUsedThenName.mockReturnValue(-1);
+      let resolveSlowDecryption: (cipherViews: CipherView[]) => void = () => {};
+      cipherService.getAllDecryptedForUrl.mockImplementation((url) => {
+        if (url === "https://slow-website.com") {
+          return new Promise((resolve) => {
+            resolveSlowDecryption = resolve;
+          });
+        }
+
+        return Promise.resolve([]);
+      });
+
+      void overlayBackground.updateOverlayCiphers(true, true, slowTab);
+      await flushPromises();
+      jest.advanceTimersByTime(150);
+      void overlayBackground.updateOverlayCiphers(false, false, fastTab);
+      await flushPromises();
+      expect(tabsSendMessageSpy).not.toHaveBeenCalledWith(slowTab, {
+        command: "focusMostRecentlyFocusedField",
+      });
+
+      resolveSlowDecryption([]);
+      await flushPromises();
+
+      expect(tabsSendMessageSpy).toHaveBeenCalledWith(slowTab, {
+        command: "focusMostRecentlyFocusedField",
+      });
+    });
+
     it("continues updating the overlay ciphers after an update fails", async () => {
       jest.useFakeTimers();
       getTabFromCurrentWindowIdSpy.mockResolvedValue(tab);

@@ -587,22 +587,23 @@ export class OverlayBackground implements OverlayBackgroundInterface {
       // `inlineMenuCiphersBuiltForTabId` for its own tab — mislabeling a
       // mixed-origin cipher set as trustworthy and suppressing the
       // port-connect recovery that would have repaired it.
-      if (generation !== this.overlayCiphersUpdateGeneration) {
-        return;
+      if (generation === this.overlayCiphersUpdateGeneration) {
+        const rebuiltInlineMenuCiphers = new Map<string, CipherView>();
+        for (let cipherIndex = 0; cipherIndex < ciphersViews.length; cipherIndex++) {
+          rebuiltInlineMenuCiphers.set(
+            `inline-menu-cipher-${cipherIndex}`,
+            ciphersViews[cipherIndex],
+          );
+        }
+        this.inlineMenuCiphers = rebuiltInlineMenuCiphers;
+        this.inlineMenuCiphersBuiltForTabId = tabId ?? null;
+
+        await this.updateInlineMenuListCiphers(currentTab);
       }
 
-      const rebuiltInlineMenuCiphers = new Map<string, CipherView>();
-      for (let cipherIndex = 0; cipherIndex < ciphersViews.length; cipherIndex++) {
-        rebuiltInlineMenuCiphers.set(
-          `inline-menu-cipher-${cipherIndex}`,
-          ciphersViews[cipherIndex],
-        );
-      }
-      this.inlineMenuCiphers = rebuiltInlineMenuCiphers;
-      this.inlineMenuCiphersBuiltForTabId = tabId ?? null;
-
-      await this.updateInlineMenuListCiphers(currentTab);
-
+      // The refocus is user-facing behavior tied to the triggering action
+      // (reopening the menu after unlocking from it) rather than part of
+      // cipher publication, so a superseded update still performs it.
       if (refocusField) {
         await BrowserApi.tabSendMessage(currentTab, { command: "focusMostRecentlyFocusedField" });
       }
