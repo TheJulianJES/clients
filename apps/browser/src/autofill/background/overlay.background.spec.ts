@@ -1337,6 +1337,24 @@ describe("OverlayBackground", () => {
       );
     });
 
+    it("builds the ciphers from a provided tab without querying the current window", async () => {
+      cipherService.getAllDecryptedForUrl.mockResolvedValue([loginCipher1]);
+      cipherService.sortCiphersByLastUsedThenName.mockReturnValue(-1);
+
+      await overlayBackground.updateOverlayCiphers(false, false, tab);
+      await flushPromises();
+
+      expect(getTabFromCurrentWindowIdSpy).not.toHaveBeenCalled();
+      expect(cipherService.getAllDecryptedForUrl).toHaveBeenCalledWith(url, mockUserId, [
+        CipherType.Card,
+        CipherType.Identity,
+        CipherType.SshKey,
+      ]);
+      expect(overlayBackground["inlineMenuCiphers"]).toStrictEqual(
+        new Map([["inline-menu-cipher-0", loginCipher1]]),
+      );
+    });
+
     it("does not resolve the in-flight update marker when a superseded update completes while a newer one is still running", async () => {
       jest.useFakeTimers();
       overlayBackground["focusedFieldData"] = createFocusedFieldDataMock({ tabId: tab.id });

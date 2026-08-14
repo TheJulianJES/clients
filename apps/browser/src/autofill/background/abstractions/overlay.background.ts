@@ -37,6 +37,7 @@ export type UpdateOverlayCiphersParams = {
   updateAllCipherTypes: boolean;
   refocusField: boolean;
   generation: number;
+  tab?: chrome.tabs.Tab;
 };
 
 export type FocusedFieldData = {
@@ -324,5 +325,9 @@ export type InlineMenuListPortMessageHandlers = {
 export interface OverlayBackground {
   init(): Promise<void>;
   removePageDetails(tabId: number): void;
-  updateOverlayCiphers(updateAllCipherTypes?: boolean): Promise<void>;
+  updateOverlayCiphers(
+    updateAllCipherTypes?: boolean,
+    refocusField?: boolean,
+    tab?: chrome.tabs.Tab,
+  ): Promise<void>;
 }

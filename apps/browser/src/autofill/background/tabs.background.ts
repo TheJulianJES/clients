@@ -92,7 +92,9 @@ export default class TabsBackground {
       return;
     }
 
-    await this.overlayBackground.updateOverlayCiphers(false);
+    // Pass the event's tab so the cipher update does not depend on re-resolving
+    // the active tab through a window query.
+    await this.overlayBackground.updateOverlayCiphers(false, false, tab);
 
     if (this.main.onUpdatedRan) {
       return;

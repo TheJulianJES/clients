@@ -466,8 +466,14 @@ export class OverlayBackground implements OverlayBackgroundInterface {
    *
    * @param updateAllCipherTypes - Identifies credit card and identity cipher types should also be updated
    * @param refocusField - Identifies whether the most recently focused field should be refocused
+   * @param tab - The tab to build the ciphers for; when omitted, the currently active tab is
+   *   resolved through a window query, which is less reliable (see `handleOverlayCiphersUpdate`)
    */
-  async updateOverlayCiphers(updateAllCipherTypes = true, refocusField = false) {
+  async updateOverlayCiphers(
+    updateAllCipherTypes = true,
+    refocusField = false,
+    tab?: chrome.tabs.Tab,
+  ) {
     const authStatus = await firstValueFrom(this.authService.activeAccountStatus$);
     if (authStatus === AuthenticationStatus.Unlocked) {
       this.inlineMenuCiphers = new Map();
@@ -481,6 +487,7 @@ export class OverlayBackground implements OverlayBackgroundInterface {
         updateAllCipherTypes,
         refocusField,
         generation: this.overlayCiphersUpdateGeneration,
+        tab,
       });
     }
   }
@@ -496,9 +503,15 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     updateAllCipherTypes,
     refocusField,
     generation,
+    tab,
   }: UpdateOverlayCiphersParams) {
     try {
-      const currentTab = await BrowserApi.getTabFromCurrentWindowId();
+      // Prefer a tab handed in by the caller (e.g. the tab from a `tabs.onUpdated` event or an
+      // inline menu port's sender). The window query fallback can fail or resolve a different
+      // window's tab under some browsers' window models (notably Vivaldi), which previously left
+      // the cleared cipher set empty — showing "no items" in the inline menu while the badge,
+      // which receives its tab from the event, stayed correct.
+      const currentTab = tab ?? (await BrowserApi.getTabFromCurrentWindowId());
 
       if (
         this.focusedFieldData &&

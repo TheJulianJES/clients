@@ -197,7 +197,7 @@ describe("TabsBackground", () => {
         await flushPromises();
 
         expect(mainBackground.refreshMenu).toHaveBeenCalled();
-        expect(overlayBackground.updateOverlayCiphers).toHaveBeenCalled();
+        expect(overlayBackground.updateOverlayCiphers).toHaveBeenCalledWith(false, false, tab);
       });
 
       it("sends a `tabChanged` message to the messaging service", async () => {
