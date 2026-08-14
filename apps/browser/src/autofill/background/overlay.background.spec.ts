@@ -485,6 +485,7 @@ describe("OverlayBackground", () => {
         }),
       );
     });
+
     it("posts the init message after the bounded wait elapses when a cipher update does not complete in time", async () => {
       jest.useFakeTimers();
       const tab = createChromeTabMock({ url: "https://jest-testing-website.com" });
@@ -550,6 +551,93 @@ describe("OverlayBackground", () => {
 
       expect(listPortSpy.postMessage).not.toHaveBeenCalledWith(
         expect.objectContaining({ command: "initAutofillInlineMenuList" }),
+      );
+      expect(tabsSendMessageSpy).toHaveBeenCalledWith(
+        listPortSpy.sender.tab,
+        { command: "closeAutofillInlineMenu", overlayElement: undefined },
+        { frameId: 0 },
+      );
+    });
+
+    it("only initializes the most recent list port when multiple ports connect during a cipher update", async () => {
+      const tab = createChromeTabMock({ url: "https://jest-testing-website.com" });
+      getTabFromCurrentWindowIdSpy.mockResolvedValue(tab);
+      cipherService.sortCiphersByLastUsedThenName.mockReturnValue(-1);
+      let resolveDecryptedCiphers: (cipherViews: CipherView[]) => void = () => {};
+      cipherService.getAllDecryptedForUrl.mockReturnValue(
+        new Promise((resolve) => {
+          resolveDecryptedCiphers = resolve;
+        }),
+      );
+
+      void overlayBackground.updateOverlayCiphers(false);
+      await flushPromises();
+
+      const firstListPort = createPortSpyMock(AutofillOverlayPort.List);
+      triggerPortOnConnectEvent(firstListPort);
+      await flushPromises();
+      const secondListPort = createPortSpyMock(AutofillOverlayPort.List);
+      triggerPortOnConnectEvent(secondListPort);
+      await flushPromises();
+
+      resolveDecryptedCiphers([]);
+      await flushPromises();
+
+      expect(firstListPort.postMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ command: "initAutofillInlineMenuList" }),
+      );
+      expect(secondListPort.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ command: "initAutofillInlineMenuList" }),
+      );
+    });
+
+    it("resolves the save login menu decision against the updated cipher state when a cipher update is in flight", async () => {
+      const url = "https://jest-testing-website.com";
+      const tab = createChromeTabMock({ url });
+      const loginCipher = mock<CipherView>({
+        id: "cipher-id",
+        localData: { lastUsedDate: 222 },
+        name: "cipher-name",
+        type: CipherType.Login,
+        login: { username: "username", password: "password", uri: url },
+      });
+      overlayBackground["focusedFieldData"] = createFocusedFieldDataMock({ tabId: tab.id });
+      getTabFromCurrentWindowIdSpy.mockResolvedValue(tab);
+      cipherService.sortCiphersByLastUsedThenName.mockReturnValue(-1);
+      tabsSendMessageSpy.mockImplementation((_tab, message) => {
+        if (message.command === "checkMostRecentlyFocusedFieldHasValue") {
+          return Promise.resolve(true);
+        }
+
+        if (message.command === "getInlineMenuFormFieldData") {
+          return Promise.resolve({ uri: url, username: "username", password: "password" });
+        }
+
+        return Promise.resolve();
+      });
+      let resolveDecryptedCiphers: (cipherViews: CipherView[]) => void = () => {};
+      cipherService.getAllDecryptedForUrl.mockReturnValue(
+        new Promise((resolve) => {
+          resolveDecryptedCiphers = resolve;
+        }),
+      );
+
+      void overlayBackground.updateOverlayCiphers(false);
+      await flushPromises();
+
+      triggerPortOnConnectEvent(createPortSpyMock(AutofillOverlayPort.List));
+      await flushPromises();
+      listPortSpy = overlayBackground["inlineMenuListPort"];
+
+      resolveDecryptedCiphers([loginCipher]);
+      await flushPromises();
+
+      expect(listPortSpy.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: "initAutofillInlineMenuList",
+          showSaveLoginMenu: false,
+          ciphers: [expect.objectContaining({ id: "inline-menu-cipher-0" })],
+        }),
       );
     });
   });

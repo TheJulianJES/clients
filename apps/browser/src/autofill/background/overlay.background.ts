@@ -3535,14 +3535,25 @@ export class OverlayBackground implements OverlayBackgroundInterface {
       await this.waitForInFlightOverlayCiphersUpdate();
 
       // The wait can park this connection for up to half a second. Bail out if
-      // the port was superseded by a newer connection in the meantime, or if
-      // the focused field belongs to a different tab than this port —
-      // `inlineMenuCiphers` is rebuilt for the currently active tab, so posting
-      // after a tab switch would deliver another tab's ciphers to this port.
+      // the port was superseded by a newer connection in the meantime — the
+      // newer connection initializes its own menu, so no cleanup is needed
+      // here (and closing would tear down that newer menu).
       if (this.inlineMenuListPort !== port) {
         return;
       }
-      if (this.focusedFieldData && this.focusedFieldData.tabId !== port.sender.tab.id) {
+
+      // Also bail out if the focused field belongs to a different tab than
+      // this port — `inlineMenuCiphers` is rebuilt for the currently active
+      // tab, so posting after a tab switch would deliver another tab's ciphers
+      // to this port. Close the menu on the bailing port's tab so its iframe
+      // is not left connected but uninitialized.
+      if (
+        this.focusedFieldData &&
+        this.focusedFieldData.tabId !== null &&
+        this.focusedFieldData.tabId !== undefined &&
+        this.focusedFieldData.tabId !== port.sender.tab.id
+      ) {
+        this.closeInlineMenu(port.sender, { forceCloseInlineMenu: true });
         return;
       }
     }
