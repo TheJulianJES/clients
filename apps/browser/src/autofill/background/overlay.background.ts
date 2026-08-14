@@ -156,6 +156,7 @@ export class OverlayBackground implements OverlayBackgroundInterface {
   private inlineMenuListPort: chrome.runtime.Port | null = null;
   private inlineMenuListMessageConnectorPort: chrome.runtime.Port | null = null;
   private inlineMenuCiphers: Map<string, CipherView> = new Map();
+  private inlineMenuCiphersBuiltForTabId: number | null = null;
   private inFlightOverlayCiphersUpdate: Promise<void> | null = null;
   private resolveInFlightOverlayCiphersUpdate: (() => void) | null = null;
   private overlayCiphersUpdateGeneration = 0;
@@ -477,6 +478,7 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     const authStatus = await firstValueFrom(this.authService.activeAccountStatus$);
     if (authStatus === AuthenticationStatus.Unlocked) {
       this.inlineMenuCiphers = new Map();
+      this.inlineMenuCiphersBuiltForTabId = null;
       this.overlayCiphersUpdateGeneration++;
       if (this.inFlightOverlayCiphersUpdate === null) {
         this.inFlightOverlayCiphersUpdate = new Promise((resolve) => {
@@ -550,6 +552,7 @@ export class OverlayBackground implements OverlayBackgroundInterface {
       for (let cipherIndex = 0; cipherIndex < ciphersViews.length; cipherIndex++) {
         this.inlineMenuCiphers.set(`inline-menu-cipher-${cipherIndex}`, ciphersViews[cipherIndex]);
       }
+      this.inlineMenuCiphersBuiltForTabId = tabId ?? null;
 
       await this.updateInlineMenuListCiphers(currentTab);
 
@@ -3546,6 +3549,21 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     // matching login ciphers.
     if (isInlineMenuListPort) {
       await this.waitForInFlightOverlayCiphersUpdate();
+
+      // Rebuild the ciphers from this port's own tab when the current set was
+      // not built for it — including never built at all, e.g. after a service
+      // worker restart where the window query in `handleOverlayCiphersUpdate`
+      // failed or resolved a different window's tab. The connecting port's
+      // sender tab is ground truth for where the menu is opening. Gated on the
+      // focused field belonging to this tab so the rebuild only runs for a
+      // genuine menu open.
+      if (
+        this.focusedFieldData?.tabId === port.sender.tab.id &&
+        this.inlineMenuCiphersBuiltForTabId !== port.sender.tab.id
+      ) {
+        await this.updateOverlayCiphers(false, false, port.sender.tab);
+        await this.waitForInFlightOverlayCiphersUpdate();
+      }
 
       // The wait can park this connection for up to half a second. Bail out if
       // the port was superseded by a newer connection in the meantime. A

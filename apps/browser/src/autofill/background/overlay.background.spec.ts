@@ -596,6 +596,94 @@ describe("OverlayBackground", () => {
       );
     });
 
+    it("rebuilds the ciphers from the connecting port's tab when the window query failed to resolve a tab", async () => {
+      jest.useFakeTimers();
+      const url = "https://jest-testing-website.com";
+      const loginCipher = mock<CipherView>({
+        id: "cipher-id",
+        localData: { lastUsedDate: 222 },
+        name: "cipher-name",
+        type: CipherType.Login,
+        login: { username: "username", password: "password", uri: url },
+      });
+      getTabFromCurrentWindowIdSpy.mockResolvedValue(null);
+      getTabSpy.mockResolvedValue(createChromeTabMock({ id: 1 }));
+      cipherService.getAllDecryptedForUrl.mockResolvedValue([loginCipher]);
+      cipherService.sortCiphersByLastUsedThenName.mockReturnValue(-1);
+      overlayBackground["focusedFieldData"] = createFocusedFieldDataMock({ tabId: 1 });
+
+      void overlayBackground.updateOverlayCiphers(false);
+      await flushPromises();
+      expect(cipherService.getAllDecryptedForUrl).not.toHaveBeenCalled();
+
+      triggerPortOnConnectEvent(createPortSpyMock(AutofillOverlayPort.List));
+      await flushPromises();
+      jest.advanceTimersByTime(150);
+      await flushPromises();
+      listPortSpy = overlayBackground["inlineMenuListPort"];
+
+      expect(listPortSpy.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: "initAutofillInlineMenuList",
+          ciphers: [expect.objectContaining({ id: "inline-menu-cipher-0" })],
+        }),
+      );
+    });
+
+    it("rebuilds the ciphers from the connecting port's tab when the window query resolved a different tab", async () => {
+      jest.useFakeTimers();
+      const queriedTab = createChromeTabMock({ id: 99, url: "https://other-website.com" });
+      getTabFromCurrentWindowIdSpy.mockResolvedValue(queriedTab);
+      getTabSpy.mockResolvedValue(createChromeTabMock({ id: 1 }));
+      cipherService.getAllDecryptedForUrl.mockResolvedValue([]);
+      cipherService.sortCiphersByLastUsedThenName.mockReturnValue(-1);
+      overlayBackground["focusedFieldData"] = createFocusedFieldDataMock({ tabId: 1 });
+
+      void overlayBackground.updateOverlayCiphers(false);
+      await flushPromises();
+      expect(cipherService.getAllDecryptedForUrl).toHaveBeenCalledWith(
+        "https://other-website.com",
+        mockUserId,
+        [CipherType.Card, CipherType.Identity, CipherType.SshKey],
+      );
+
+      triggerPortOnConnectEvent(createPortSpyMock(AutofillOverlayPort.List));
+      await flushPromises();
+      jest.advanceTimersByTime(150);
+      await flushPromises();
+      listPortSpy = overlayBackground["inlineMenuListPort"];
+
+      expect(cipherService.getAllDecryptedForUrl).toHaveBeenCalledWith(
+        "https://jest-testing-website.com",
+        mockUserId,
+        [CipherType.Card, CipherType.Identity, CipherType.SshKey],
+      );
+      expect(listPortSpy.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ command: "initAutofillInlineMenuList" }),
+      );
+    });
+
+    it("does not rebuild the ciphers when the current set was already built for the connecting port's tab", async () => {
+      const tab = createChromeTabMock({ url: "https://jest-testing-website.com" });
+      getTabFromCurrentWindowIdSpy.mockResolvedValue(tab);
+      cipherService.getAllDecryptedForUrl.mockResolvedValue([]);
+      cipherService.sortCiphersByLastUsedThenName.mockReturnValue(-1);
+      overlayBackground["focusedFieldData"] = createFocusedFieldDataMock({ tabId: tab.id });
+
+      await overlayBackground.updateOverlayCiphers(false);
+      await flushPromises();
+      expect(cipherService.getAllDecryptedForUrl).toHaveBeenCalledTimes(1);
+
+      triggerPortOnConnectEvent(createPortSpyMock(AutofillOverlayPort.List));
+      await flushPromises();
+      listPortSpy = overlayBackground["inlineMenuListPort"];
+
+      expect(cipherService.getAllDecryptedForUrl).toHaveBeenCalledTimes(1);
+      expect(listPortSpy.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ command: "initAutofillInlineMenuList" }),
+      );
+    });
+
     it("closes the inline menu of a waiting port's tab when it is superseded by a port from another tab", async () => {
       const tab = createChromeTabMock({ url: "https://jest-testing-website.com" });
       getTabFromCurrentWindowIdSpy.mockResolvedValue(tab);
