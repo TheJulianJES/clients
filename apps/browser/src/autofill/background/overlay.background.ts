@@ -159,6 +159,7 @@ export class OverlayBackground implements OverlayBackgroundInterface {
   private inFlightOverlayCiphersUpdate: Promise<void> | null = null;
   private resolveInFlightOverlayCiphersUpdate: (() => void) | null = null;
   private overlayCiphersUpdateGeneration = 0;
+  private readonly inFlightCiphersUpdateMaxWaitMs = 500;
   private inlineMenuFido2Credentials: Set<string> = new Set();
   private inlineMenuPageTranslations: Record<string, string> | null = null;
   private inlineMenuPosition: InlineMenuPosition = {};
@@ -3517,12 +3518,6 @@ export class OverlayBackground implements OverlayBackgroundInterface {
 
     port.onDisconnect.addListener(this.handlePortOnDisconnect);
 
-    const authStatus = await this.getAuthStatus();
-
-    const showSaveLoginMenu =
-      (await this.checkFocusedFieldHasValue(port.sender.tab)) &&
-      (await this.shouldShowSaveLoginInlineMenuList(port.sender.tab));
-
     const showAnimations = await firstValueFrom(this.autofillService.enableInlineMenuAnimation$);
     const theme = await firstValueFrom(this.themeStateService.selectedTheme$);
     const useLitComponents = isInlineMenuListPort
@@ -3538,7 +3533,25 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     // matching login ciphers.
     if (isInlineMenuListPort) {
       await this.waitForInFlightOverlayCiphersUpdate();
+
+      // The wait can park this connection for up to half a second. Bail out if
+      // the port was superseded by a newer connection in the meantime, or if
+      // the focused field belongs to a different tab than this port —
+      // `inlineMenuCiphers` is rebuilt for the currently active tab, so posting
+      // after a tab switch would deliver another tab's ciphers to this port.
+      if (this.inlineMenuListPort !== port) {
+        return;
+      }
+      if (this.focusedFieldData && this.focusedFieldData.tabId !== port.sender.tab.id) {
+        return;
+      }
     }
+
+    const authStatus = await this.getAuthStatus();
+
+    const showSaveLoginMenu =
+      (await this.checkFocusedFieldHasValue(port.sender.tab)) &&
+      (await this.shouldShowSaveLoginInlineMenuList(port.sender.tab));
 
     const ciphers = isInlineMenuListPort ? await this.getInlineMenuCipherData() : null;
     const showInlineMenuAccountCreation = this.shouldShowInlineMenuAccountCreation();
@@ -3657,9 +3670,10 @@ export class OverlayBackground implements OverlayBackgroundInterface {
    * triggered and repopulated asynchronously, so cipher-dependent decisions
    * made while an update is in flight would be based on a transiently empty
    * cipher set. The wait is bounded so a long-running update (e.g. initial
-   * vault decryption) delays the inline menu instead of blocking it; in that
-   * case the completed update corrects the list through
-   * `updateInlineMenuListCiphers`.
+   * vault decryption) delays the inline menu instead of blocking it. On the
+   * timeout path the menu can still initialize without the latest ciphers;
+   * the completed update then posts `updateAutofillInlineMenuListCiphers`,
+   * which corrects the list once the menu's iframe handshake has completed.
    */
   private async waitForInFlightOverlayCiphersUpdate() {
     const inFlightUpdate = this.inFlightOverlayCiphersUpdate;
@@ -3671,7 +3685,7 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     await Promise.race([
       inFlightUpdate,
       new Promise<void>((resolve) => {
-        timeoutId = globalThis.setTimeout(resolve, 500);
+        timeoutId = globalThis.setTimeout(resolve, this.inFlightCiphersUpdateMaxWaitMs);
       }),
     ]);
     if (timeoutId !== null) {

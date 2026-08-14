@@ -485,6 +485,73 @@ describe("OverlayBackground", () => {
         }),
       );
     });
+    it("posts the init message after the bounded wait elapses when a cipher update does not complete in time", async () => {
+      jest.useFakeTimers();
+      const tab = createChromeTabMock({ url: "https://jest-testing-website.com" });
+      getTabFromCurrentWindowIdSpy.mockResolvedValue(tab);
+      cipherService.getAllDecryptedForUrl.mockReturnValue(new Promise(() => {}));
+
+      void overlayBackground.updateOverlayCiphers(false);
+      await flushPromises();
+
+      triggerPortOnConnectEvent(createPortSpyMock(AutofillOverlayPort.List));
+      await flushPromises();
+      listPortSpy = overlayBackground["inlineMenuListPort"];
+      expect(listPortSpy.postMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ command: "initAutofillInlineMenuList" }),
+      );
+
+      jest.advanceTimersByTime(500);
+      await flushPromises();
+
+      expect(listPortSpy.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ command: "initAutofillInlineMenuList" }),
+      );
+    });
+
+    it("does not delay the button port init message while a cipher update is in flight", async () => {
+      const tab = createChromeTabMock({ url: "https://jest-testing-website.com" });
+      getTabFromCurrentWindowIdSpy.mockResolvedValue(tab);
+      cipherService.getAllDecryptedForUrl.mockReturnValue(new Promise(() => {}));
+
+      void overlayBackground.updateOverlayCiphers(false);
+      await flushPromises();
+
+      triggerPortOnConnectEvent(createPortSpyMock(AutofillOverlayPort.Button));
+      await flushPromises();
+      buttonPortSpy = overlayBackground["inlineMenuButtonPort"];
+
+      expect(buttonPortSpy.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ command: "initAutofillInlineMenuButton" }),
+      );
+    });
+
+    it("skips the init message when the focused field moved to another tab while waiting on a cipher update", async () => {
+      const tab = createChromeTabMock({ url: "https://jest-testing-website.com" });
+      getTabFromCurrentWindowIdSpy.mockResolvedValue(tab);
+      cipherService.sortCiphersByLastUsedThenName.mockReturnValue(-1);
+      let resolveDecryptedCiphers: (cipherViews: CipherView[]) => void = () => {};
+      cipherService.getAllDecryptedForUrl.mockReturnValue(
+        new Promise((resolve) => {
+          resolveDecryptedCiphers = resolve;
+        }),
+      );
+
+      void overlayBackground.updateOverlayCiphers(false);
+      await flushPromises();
+
+      triggerPortOnConnectEvent(createPortSpyMock(AutofillOverlayPort.List));
+      await flushPromises();
+      listPortSpy = overlayBackground["inlineMenuListPort"];
+      overlayBackground["focusedFieldData"] = createFocusedFieldDataMock({ tabId: 99 });
+
+      resolveDecryptedCiphers([]);
+      await flushPromises();
+
+      expect(listPortSpy.postMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ command: "initAutofillInlineMenuList" }),
+      );
+    });
   });
 
   describe("when enableFillAssist is turned off", () => {
