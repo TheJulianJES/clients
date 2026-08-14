@@ -158,6 +158,7 @@ export class OverlayBackground implements OverlayBackgroundInterface {
   private inlineMenuCiphers: Map<string, CipherView> = new Map();
   private inFlightOverlayCiphersUpdate: Promise<void> | null = null;
   private resolveInFlightOverlayCiphersUpdate: (() => void) | null = null;
+  private overlayCiphersUpdateGeneration = 0;
   private inlineMenuFido2Credentials: Set<string> = new Set();
   private inlineMenuPageTranslations: Record<string, string> | null = null;
   private inlineMenuPosition: InlineMenuPosition = {};
@@ -469,12 +470,17 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     const authStatus = await firstValueFrom(this.authService.activeAccountStatus$);
     if (authStatus === AuthenticationStatus.Unlocked) {
       this.inlineMenuCiphers = new Map();
+      this.overlayCiphersUpdateGeneration++;
       if (this.inFlightOverlayCiphersUpdate === null) {
         this.inFlightOverlayCiphersUpdate = new Promise((resolve) => {
           this.resolveInFlightOverlayCiphersUpdate = resolve;
         });
       }
-      this.updateOverlayCiphers$.next({ updateAllCipherTypes, refocusField });
+      this.updateOverlayCiphers$.next({
+        updateAllCipherTypes,
+        refocusField,
+        generation: this.overlayCiphersUpdateGeneration,
+      });
     }
   }
 
@@ -488,6 +494,7 @@ export class OverlayBackground implements OverlayBackgroundInterface {
   async handleOverlayCiphersUpdate({
     updateAllCipherTypes,
     refocusField,
+    generation,
   }: UpdateOverlayCiphersParams) {
     try {
       const currentTab = await BrowserApi.getTabFromCurrentWindowId();
@@ -535,10 +542,23 @@ export class OverlayBackground implements OverlayBackgroundInterface {
       if (refocusField) {
         await BrowserApi.tabSendMessage(currentTab, { command: "focusMostRecentlyFocusedField" });
       }
+    } catch (error) {
+      // Catching here keeps a failed update (e.g. a decryption error during a
+      // lock transition) from erroring the `updateOverlayCiphers$` pipeline,
+      // which would otherwise stop all future cipher updates for the life of
+      // the service worker.
+      this.logService.error(error);
     } finally {
-      this.resolveInFlightOverlayCiphersUpdate?.();
-      this.resolveInFlightOverlayCiphersUpdate = null;
-      this.inFlightOverlayCiphersUpdate = null;
+      // `switchMap` cannot cancel an in-flight promise, so a superseded update
+      // still runs this block. Only the update for the most recent
+      // `updateOverlayCiphers` call may resolve the in-flight marker —
+      // otherwise a stale update would release waiters (and clear the marker)
+      // while the cipher set is still being rebuilt.
+      if (generation === this.overlayCiphersUpdateGeneration) {
+        this.resolveInFlightOverlayCiphersUpdate?.();
+        this.resolveInFlightOverlayCiphersUpdate = null;
+        this.inFlightOverlayCiphersUpdate = null;
+      }
     }
   }
 

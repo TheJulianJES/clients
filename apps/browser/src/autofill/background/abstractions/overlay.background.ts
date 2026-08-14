@@ -36,6 +36,7 @@ export type SubFrameOffsetsForTab = Record<TabId, SubFrameOffsetsByFrame>;
 export type UpdateOverlayCiphersParams = {
   updateAllCipherTypes: boolean;
   refocusField: boolean;
+  generation: number;
 };
 
 export type FocusedFieldData = {

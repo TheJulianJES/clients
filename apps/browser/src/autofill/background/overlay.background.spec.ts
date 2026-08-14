@@ -1139,6 +1139,75 @@ describe("OverlayBackground", () => {
       );
     });
 
+    it("does not resolve the in-flight update marker when a superseded update completes while a newer one is still running", async () => {
+      jest.useFakeTimers();
+      overlayBackground["focusedFieldData"] = createFocusedFieldDataMock({ tabId: tab.id });
+      getTabFromCurrentWindowIdSpy.mockResolvedValue(tab);
+      cipherService.sortCiphersByLastUsedThenName.mockReturnValue(-1);
+      const pendingDecryptions: ((cipherViews: CipherView[]) => void)[] = [];
+      cipherService.getAllDecryptedForUrl.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            pendingDecryptions.push(resolve);
+          }),
+      );
+
+      void overlayBackground.updateOverlayCiphers(false);
+      await flushPromises();
+      jest.advanceTimersByTime(150);
+      void overlayBackground.updateOverlayCiphers(false);
+      await flushPromises();
+      expect(pendingDecryptions).toHaveLength(2);
+
+      triggerPortOnConnectEvent(createPortSpyMock(AutofillOverlayPort.List));
+      await flushPromises();
+      listPortSpy = overlayBackground["inlineMenuListPort"];
+
+      pendingDecryptions[0]([]);
+      await flushPromises();
+
+      expect(overlayBackground["inFlightOverlayCiphersUpdate"]).not.toBeNull();
+      expect(listPortSpy.postMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ command: "initAutofillInlineMenuList" }),
+      );
+
+      pendingDecryptions[1]([loginCipher1]);
+      await flushPromises();
+
+      expect(overlayBackground["inFlightOverlayCiphersUpdate"]).toBeNull();
+      expect(listPortSpy.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: "initAutofillInlineMenuList",
+          showInlineMenuAccountCreation: false,
+          generatedPassword: null,
+          ciphers: [expect.objectContaining({ id: "inline-menu-cipher-0" })],
+        }),
+      );
+    });
+
+    it("continues updating the overlay ciphers after an update fails", async () => {
+      jest.useFakeTimers();
+      getTabFromCurrentWindowIdSpy.mockResolvedValue(tab);
+      cipherService.sortCiphersByLastUsedThenName.mockReturnValue(-1);
+      cipherService.getAllDecryptedForUrl.mockRejectedValueOnce(new Error("decryption failed"));
+
+      void overlayBackground.updateOverlayCiphers(false);
+      await flushPromises();
+
+      expect(logService.error).toHaveBeenCalledWith(new Error("decryption failed"));
+      expect(overlayBackground["inFlightOverlayCiphersUpdate"]).toBeNull();
+
+      jest.advanceTimersByTime(150);
+      cipherService.getAllDecryptedForUrl.mockResolvedValue([loginCipher1]);
+      void overlayBackground.updateOverlayCiphers(false);
+      await flushPromises();
+
+      expect(overlayBackground["inFlightOverlayCiphersUpdate"]).toBeNull();
+      expect(overlayBackground["inlineMenuCiphers"]).toStrictEqual(
+        new Map([["inline-menu-cipher-0", loginCipher1]]),
+      );
+    });
+
     it("posts an `updateAutofillInlineMenuListCiphers` message to the overlay list port, and send a `updateAutofillInlineMenuListCiphers` message to the tab indicating that the list of ciphers is populated", async () => {
       overlayBackground["focusedFieldData"] = createFocusedFieldDataMock({ tabId: tab.id });
       cipherService.getAllDecryptedForUrl.mockResolvedValue([loginCipher1]);
