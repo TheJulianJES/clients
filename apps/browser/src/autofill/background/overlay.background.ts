@@ -3535,10 +3535,15 @@ export class OverlayBackground implements OverlayBackgroundInterface {
       await this.waitForInFlightOverlayCiphersUpdate();
 
       // The wait can park this connection for up to half a second. Bail out if
-      // the port was superseded by a newer connection in the meantime — the
-      // newer connection initializes its own menu, so no cleanup is needed
-      // here (and closing would tear down that newer menu).
+      // the port was superseded by a newer connection in the meantime. A
+      // same-tab successor initializes its own menu, so closing here would
+      // tear down that newer menu — but when the successor belongs to a
+      // different tab (or the port has since disconnected), close the menu on
+      // this port's tab so its iframe is not left connected but uninitialized.
       if (this.inlineMenuListPort !== port) {
+        if (this.inlineMenuListPort?.sender?.tab?.id !== port.sender.tab.id) {
+          this.closeInlineMenu(port.sender, { forceCloseInlineMenu: true });
+        }
         return;
       }
 

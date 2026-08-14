@@ -554,7 +554,7 @@ describe("OverlayBackground", () => {
       );
       expect(tabsSendMessageSpy).toHaveBeenCalledWith(
         listPortSpy.sender.tab,
-        { command: "closeAutofillInlineMenu", overlayElement: undefined },
+        expect.objectContaining({ command: "closeAutofillInlineMenu" }),
         { frameId: 0 },
       );
     });
@@ -587,6 +587,49 @@ describe("OverlayBackground", () => {
         expect.objectContaining({ command: "initAutofillInlineMenuList" }),
       );
       expect(secondListPort.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ command: "initAutofillInlineMenuList" }),
+      );
+      expect(tabsSendMessageSpy).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ command: "closeAutofillInlineMenu" }),
+        expect.anything(),
+      );
+    });
+
+    it("closes the inline menu of a waiting port's tab when it is superseded by a port from another tab", async () => {
+      const tab = createChromeTabMock({ url: "https://jest-testing-website.com" });
+      getTabFromCurrentWindowIdSpy.mockResolvedValue(tab);
+      cipherService.sortCiphersByLastUsedThenName.mockReturnValue(-1);
+      let resolveDecryptedCiphers: (cipherViews: CipherView[]) => void = () => {};
+      cipherService.getAllDecryptedForUrl.mockReturnValue(
+        new Promise((resolve) => {
+          resolveDecryptedCiphers = resolve;
+        }),
+      );
+
+      void overlayBackground.updateOverlayCiphers(false);
+      await flushPromises();
+
+      const firstTabListPort = createPortSpyMock(AutofillOverlayPort.List);
+      triggerPortOnConnectEvent(firstTabListPort);
+      await flushPromises();
+      const secondTabListPort = createPortSpyMock(AutofillOverlayPort.List);
+      secondTabListPort.sender.tab = createChromeTabMock({ id: 2 });
+      triggerPortOnConnectEvent(secondTabListPort);
+      await flushPromises();
+
+      resolveDecryptedCiphers([]);
+      await flushPromises();
+
+      expect(firstTabListPort.postMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ command: "initAutofillInlineMenuList" }),
+      );
+      expect(tabsSendMessageSpy).toHaveBeenCalledWith(
+        firstTabListPort.sender.tab,
+        expect.objectContaining({ command: "closeAutofillInlineMenu" }),
+        { frameId: 0 },
+      );
+      expect(secondTabListPort.postMessage).toHaveBeenCalledWith(
         expect.objectContaining({ command: "initAutofillInlineMenuList" }),
       );
     });
